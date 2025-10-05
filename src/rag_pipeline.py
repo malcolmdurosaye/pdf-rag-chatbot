@@ -3,6 +3,7 @@ import faiss
 import numpy as np
 import streamlit as st
 import time
+import math
 from typing import List, Tuple, Optional
 from requests.exceptions import RequestException
 from cohere.errors import TooManyRequestsError
@@ -22,15 +23,11 @@ def create_embeddings(
     batch_size = 100
     embeddings = []
 
-    def estimate_tokens(texts: List[str]) -> float:
-        # Rough token estimation
-        return sum(len(text.split()) for text in texts) * 1.2
+    total_batches = max(1, math.ceil(len(chunks) / batch_size)) if chunks else 1
+    progress_bar = st.progress(0) if chunks else None
 
     for i in range(0, len(chunks), batch_size):
         batch = chunks[i:i + batch_size]
-        token_count = estimate_tokens(batch)
-        st.info(f"Processing batch {i//batch_size + 1} with {len(batch)} chunks (~{int(token_count)} tokens)")
-
         for attempt in range(max_retries):
             try:
                 response = cohere_client.embed(
@@ -40,8 +37,11 @@ def create_embeddings(
                 )
                 batch_embeddings = np.array(response.embeddings, dtype=np.float32)
                 embeddings.append(batch_embeddings)
-                st.success(f"Batch {i//batch_size + 1} embedded successfully!")
                 time.sleep(sleep_time)
+                if progress_bar is not None:
+                    completed_batches = (i // batch_size) + 1
+                    progress_value = min(100, int((completed_batches / total_batches) * 100))
+                    progress_bar.progress(progress_value)
                 break
             except TooManyRequestsError as e:
                 if attempt < max_retries - 1:
@@ -63,6 +63,10 @@ def create_embeddings(
     if not embeddings:
         st.error("No embeddings generated. Check PDF size or network.")
         return np.array([])
+
+    if progress_bar is not None:
+        progress_bar.progress(100)
+        progress_bar.empty()
 
     # Use vstack for clarity
     return np.vstack(embeddings)

@@ -24,7 +24,7 @@ COHERE_API_KEY = st.secrets.get("COHERE_API_KEY", "sS5dzpbakUlfsYsIdLMwFUic1MV8J
 co = cohere.Client(COHERE_API_KEY)
 
 # Sidebar: File Upload & Model Selection
-st.sidebar.title("PDF RAG Chatbot")
+st.sidebar.title("PV Chatbot Training")
 st.sidebar.markdown("Upload multiple PDFs and interact with them using RAG and Cohere.")
 
 DB_PATH = "data/rag.db"
@@ -67,6 +67,8 @@ if uploaded_files:
         st.session_state['all_embeddings'] = embeddings
         st.session_state['all_file_names'] = file_names
         st.session_state['index'] = build_faiss_index(embeddings)
+        if st.session_state.get('selected_file_choice') not in (["All"] + unique_files):
+            st.session_state['selected_file_choice'] = "All"
         st.sidebar.success(
             f"Loaded {len(unique_files)} files from storage. Total chunks: {len(chunks)}"
         )
@@ -125,11 +127,15 @@ if st.session_state.get('policy_template_text'):
 if not st.session_state.get('uploaded_files'):
     chunks, embeddings, file_names = load_chunks_and_embeddings(conn)
     if chunks:
+        unique_files = list(dict.fromkeys(file_names))
+        st.session_state['uploaded_files'] = unique_files
         st.session_state['all_chunks'] = chunks
         st.session_state['all_embeddings'] = embeddings
         st.session_state['all_file_names'] = file_names
         st.session_state['index'] = build_faiss_index(embeddings)
-        st.sidebar.info(f"Loaded {len(chunks)} chunks from {len(set(file_names))} files.")
+        if st.session_state.get('selected_file_choice') not in (["All"] + unique_files):
+            st.session_state['selected_file_choice'] = "All"
+        st.sidebar.info(f"Loaded {len(chunks)} chunks from {len(unique_files)} files.")
 
 # Sidebar: Model Selection
 st.sidebar.subheader("Model Selection")
@@ -159,6 +165,10 @@ if existing_files:
         st.session_state['all_embeddings'] = embeddings
         st.session_state['all_file_names'] = file_names
         st.session_state['index'] = build_faiss_index(embeddings)
+        unique_files = list(dict.fromkeys(file_names))
+        st.session_state['uploaded_files'] = unique_files
+        if st.session_state.get('selected_file_choice') not in (["All"] + unique_files):
+            st.session_state['selected_file_choice'] = "All"
         st.sidebar.success(f"Deleted: {', '.join(files_to_delete)}")
 # Confirmation for clearing all PDFs
 clear_all_confirm = st.sidebar.checkbox("Do you want to clear all PDFs in the database?")
@@ -171,6 +181,7 @@ if st.sidebar.button("Clear All PDF Storage") and clear_all_confirm:
     st.session_state['all_embeddings'] = np.array([])
     st.session_state['all_file_names'] = []
     st.session_state['index'] = None
+    st.session_state['selected_file_choice'] = "All"
     st.sidebar.success("All PDF storage cleared.")
 
 # Main: Workflow Steps
