@@ -1,7 +1,7 @@
 streamlit
 cohere
 PyPDF2
-pdf2image
+pypdfium2
 pytesseract
 faiss-cpu
 pillow
