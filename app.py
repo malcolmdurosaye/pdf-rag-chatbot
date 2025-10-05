@@ -119,45 +119,58 @@ Interact with your PDFs using Retrieval-Augmented Generation and Cohere. We have
 
 # Step 3: Chat Interface
 st.header("Chat with PDFs")
+
+# Chatbot UI container
+chat_container = st.container()
+
 if st.session_state.get('all_file_names'):
     unique_files = list(set(st.session_state['all_file_names']))
     selected_file = st.selectbox("Select a document to query (or All)", options=["All"] + unique_files, index=0)
 else:
     selected_file = "All"
-user_query = st.text_input("Ask a question about the PDFs:", key="query_input")
-if st.button("Send") and user_query and st.session_state.get('all_chunks'):
-    time.sleep(6)
-    if selected_file != "All":
-        file_name = selected_file
-        relevant_chunks, _ = retrieve_chunks(
-            user_query,
-            st.session_state['index'],
-            st.session_state['all_chunks'],
-            st.session_state['all_embeddings'],
-            co,
-            file_name=file_name,
-            all_file_names=st.session_state['all_file_names']
-        )
-        st.info(f"Querying {file_name} only.")
+
+# Display chat history with avatars
+with chat_container:
+    if 'chat_history' not in st.session_state or not st.session_state['chat_history']:
+        st.chat_message("assistant").write("👋 Hi! Ask me anything about your PDFs.")
     else:
-        relevant_chunks, _ = retrieve_chunks(
-            user_query,
-            st.session_state['index'],
-            st.session_state['all_chunks'],
-            st.session_state['all_embeddings'],
-            co
-        )
-        st.info("Querying all files.")
-    model = st.session_state.get('fine_tuned_model_id', 'command-r-08-2024')
-    answer = generate_answer(user_query, relevant_chunks, co, model)
-    if 'chat_history' not in st.session_state:
-        st.session_state['chat_history'] = []
-    st.session_state['chat_history'].append({"role": "user", "content": user_query})
-    st.session_state['chat_history'].append({"role": "bot", "content": answer})
-if st.session_state.get('chat_history'):
-    st.subheader("Chat History")
-    for msg in st.session_state['chat_history']:
-        st.markdown(f"**{msg['role'].capitalize()}:** {msg['content']}")
+        for msg in st.session_state['chat_history']:
+            if msg['role'] == "user":
+                st.chat_message("user").write(msg['content'])
+            else:
+                st.chat_message("assistant").write(msg['content'])
+
+# Chat input at the bottom
+with st.container():
+    user_query = st.chat_input("Type your message here...")
+    if user_query and st.session_state.get('all_chunks'):
+        time.sleep(1)
+        if selected_file != "All":
+            file_name = selected_file
+            relevant_chunks, _ = retrieve_chunks(
+                user_query,
+                st.session_state['index'],
+                st.session_state['all_chunks'],
+                st.session_state['all_embeddings'],
+                co,
+                file_name=file_name,
+                all_file_names=st.session_state['all_file_names']
+            )
+        else:
+            relevant_chunks, _ = retrieve_chunks(
+                user_query,
+                st.session_state['index'],
+                st.session_state['all_chunks'],
+                st.session_state['all_embeddings'],
+                co
+            )
+        model = st.session_state.get('fine_tuned_model_id', 'command-r-08-2024')
+        answer = generate_answer(user_query, relevant_chunks, co, model)
+        if 'chat_history' not in st.session_state:
+            st.session_state['chat_history'] = []
+        st.session_state['chat_history'].append({"role": "user", "content": user_query})
+        st.session_state['chat_history'].append({"role": "bot", "content": answer})
+        st.rerun()  # Refresh to show new message
 
 # Footer: Evaluation Criteria & Info
 st.markdown("""
