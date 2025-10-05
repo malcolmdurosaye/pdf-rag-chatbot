@@ -119,9 +119,9 @@ def retrieve_chunks(
         return [], []
 
 def generate_answer(
-    query: str, 
-    relevant_chunks: List[str], 
-    cohere_client, 
+    query: str,
+    relevant_chunks: List[str],
+    cohere_client,
     model: str = 'command-r-08-2024'
 ) -> str:
     """
@@ -135,3 +135,45 @@ def generate_answer(
     except Exception as e:
         st.error(f"Error generating answer: {str(e)}")
         return "Unable to generate answer."
+
+
+def generate_policy_brief(
+    query: str,
+    relevant_chunks: List[str],
+    cohere_client,
+    model: str = 'command-r-08-2024',
+    template: Optional[str] = None
+) -> str:
+    """Generate a structured policy brief using the retrieved context and optional template."""
+
+    default_template = (
+        "Policy Brief Title:\n"
+        "Executive Summary:\n"
+        "Background and Problem Definition:\n"
+        "Key Findings:\n"
+        "Policy Options and Analysis:\n"
+        "Recommended Actions:\n"
+        "Implementation Considerations:\n"
+        "References or Supporting Evidence:\n"
+    )
+
+    template_text = template or default_template
+    context = "\n".join(relevant_chunks)
+    instructions = (
+        "You are an expert policy analyst. Use the provided context to craft a concise, actionable policy brief. "
+        "Populate every section of the template, synthesizing evidence-driven insights. "
+        "Highlight implications, cite supporting facts from the context, and ensure recommendations are practical."
+    )
+    prompt = (
+        f"Context:\n{context}\n\n"
+        f"Template:\n{template_text}\n\n"
+        f"Task:\n{instructions}\n\n"
+        f"Policy Brief Request:\n{query}\n\n"
+        "Complete Policy Brief:"
+    )
+    try:
+        response = cohere_client.chat(model=model, message=prompt)
+        return response.text
+    except Exception as e:
+        st.error(f"Error generating policy brief: {str(e)}")
+        return "Unable to generate policy brief."

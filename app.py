@@ -5,8 +5,16 @@ import os
 import time
 import sqlite3
 import numpy as np
+from io import BytesIO
+from docx import Document
 from src.pdf_processing import extract_text_from_pdf, split_text
-from src.rag_pipeline import create_embeddings, build_faiss_index, retrieve_chunks, generate_answer
+from src.rag_pipeline import (
+    create_embeddings,
+    build_faiss_index,
+    retrieve_chunks,
+    generate_answer,
+    generate_policy_brief,
+)
 from src.evaluation import generate_ground_truth, save_ground_truth, evaluate_retrieval
 from src.fine_tuning import generate_fine_tune_dataset, start_fine_tuning
 from src.storage import init_db, save_chunks_and_embeddings, load_chunks_and_embeddings, load_chunks_for_file, get_file_names
@@ -54,6 +62,57 @@ if uploaded_files:
         st.session_state['all_file_names'] = all_file_names
         st.session_state['index'] = build_faiss_index(st.session_state['all_embeddings'])
         st.sidebar.success(f"Processed {len(st.session_state['uploaded_files'])} files. Total chunks: {len(all_chunks)}")
+
+
+def extract_policy_template_text(uploaded_template) -> str:
+    """Extract readable text from a DOCX policy brief template."""
+    try:
+        file_bytes = uploaded_template.read()
+        if hasattr(uploaded_template, "seek"):
+            uploaded_template.seek(0)
+        document = Document(BytesIO(file_bytes))
+    except Exception as template_error:
+        st.sidebar.warning(f"Unable to read template: {template_error}")
+        return ""
+
+    lines = []
+    for paragraph in document.paragraphs:
+        lines.append(paragraph.text)
+    for table in document.tables:
+        for row in table.rows:
+            cell_text = [cell.text.strip() for cell in row.cells]
+            lines.append("\t".join(filter(None, cell_text)))
+
+    template_text = "\n".join(lines).strip()
+    return template_text
+
+
+st.sidebar.subheader("Policy Brief Template (optional)")
+template_uploader = st.sidebar.file_uploader(
+    "Upload policy brief template (.docx)",
+    type=["docx"],
+    key="policy_template_uploader",
+)
+if template_uploader is not None:
+    template_text = extract_policy_template_text(template_uploader)
+    st.session_state['policy_template_text'] = template_text
+    st.session_state['policy_template_name'] = template_uploader.name
+    if template_text:
+        st.sidebar.success(f"Loaded template: {template_uploader.name}")
+    else:
+        st.sidebar.info(
+            "Template uploaded but no text detected; the default policy brief outline will be used."
+        )
+
+if st.session_state.get('policy_template_text'):
+    st.sidebar.caption(
+        f"Active template: {st.session_state.get('policy_template_name', 'custom template')}"
+    )
+    if st.sidebar.button("Remove policy template"):
+        st.session_state.pop('policy_template_text', None)
+        st.session_state.pop('policy_template_name', None)
+        st.sidebar.info("Policy template removed.")
+
 
 if not st.session_state.get('uploaded_files'):
     chunks, embeddings, file_names = load_chunks_and_embeddings(conn)
@@ -107,27 +166,26 @@ if st.sidebar.button("Clear All PDF Storage") and clear_all_confirm:
     st.sidebar.success("All PDF storage cleared.")
 
 # Main: Workflow Steps
-st.title("PDF RAG Chatbot")
-st.markdown("""
-Interact with your PDFs using Retrieval-Augmented Generation and Cohere. We have implemented the following steps below:
-1. **Upload PDFs** in the sidebar.
-2. **Generate and Edit Ground Truth** for evaluation.
-3. **Evaluate Retrieval**.
-4. **Generate Fine-Tuning Dataset** and **Start Fine-Tuning**.
-5. **Chat with PDFs** using the best model.
-""")
+# st.title("PV Chatbot")
+# st.markdown("""
+# Interact with your PDFs using Retrieval-Augmented Generation and Cohere. We have implemented the following steps below:
+# 1. **Upload PDFs** in the sidebar.
+# 2. **Generate and Edit Ground Truth** for evaluation.
+# 3. **Evaluate Retrieval**.
+# 4. **Generate Fine-Tuning Dataset** and **Start Fine-Tuning**.
+# 5. **Chat with PDFs** using the best model.
+# """)
 
 # Step 3: Chat Interface
-st.header("Chat with PDFs")
-
+st.header("Chat with PVbot")
+st.markdown("""
+Interact with your policies by following steps below:
+1. **Upload Policy PDFs** in the sidebar.
+2. **Chat with PVbot** using the best model.
+            
+""")
 # Chatbot UI container
 chat_container = st.container()
-
-if st.session_state.get('all_file_names'):
-    unique_files = list(set(st.session_state['all_file_names']))
-    selected_file = st.selectbox("Select a document to query (or All)", options=["All"] + unique_files, index=0)
-else:
-    selected_file = "All"
 
 # Display chat history with avatars
 with chat_container:
@@ -141,14 +199,85 @@ with chat_container:
                 st.chat_message("assistant").write(msg['content'])
 
 # Chat input at the bottom
+# Prepare document selection options
+file_options = ["All"]
+if st.session_state.get('all_file_names'):
+    ordered_unique_files = list(dict.fromkeys(st.session_state['all_file_names']))
+    file_options.extend(ordered_unique_files)
+
+# Policy analysis toggle inline with chat input
+if 'policy_analysis_mode' not in st.session_state:
+    st.session_state['policy_analysis_mode'] = False
+if 'selected_file_choice' not in st.session_state:
+    st.session_state['selected_file_choice'] = "All"
+
 with st.container():
-    user_query = st.chat_input("Type your message here...")
-    if user_query and st.session_state.get('all_chunks'):
+    current_choice = st.session_state.get('selected_file_choice', 'All')
+    if current_choice not in file_options:
+        current_choice = 'All'
+    selected_index = file_options.index(current_choice)
+    selected_file = st.selectbox(
+        "Select a policy document to query (or All)",
+        options=file_options,
+        index=selected_index,
+    )
+    st.session_state['selected_file_choice'] = selected_file
+
+    policy_mode = st.checkbox(
+        "I want an expert policy analysis",
+        value=st.session_state.get('policy_analysis_mode', False),
+        help="When enabled, responses are formatted as a policy brief using the uploaded template if available.",
+    )
+    st.session_state['policy_analysis_mode'] = policy_mode
+
+    generate_brief_clicked = False
+    if policy_mode:
+        if st.session_state.get('policy_template_text'):
+            st.caption(
+                f"Template in use: {st.session_state.get('policy_template_name', 'custom template')}"
+            )
+        else:
+            st.caption("You’ll get a Policy Vault Expert Brief: a polished, easy-to-read policy analysis")
+        policy_directive = st.text_area(
+            "Provide policy brief focus (optional)",
+            value=st.session_state.get('policy_directive', ""),
+            help="Add priorities, stakeholders, or constraints to tailor the policy brief.",
+            key="policy_directive_input",
+        )
+        st.session_state['policy_directive'] = policy_directive
+        generate_brief_clicked = st.button(
+            "Generate policy brief",
+            use_container_width=True,
+            key="generate_policy_brief_button",
+        )
+    else:
+        policy_directive = ""
+        st.session_state.pop('policy_directive', None)
+        st.session_state.pop('policy_directive_input', None)
+        generate_brief_clicked = False
+
+    user_query = None
+    if not policy_mode:
+        user_query = st.chat_input(placeholder="Ask anything")
+    trigger_policy_request = (
+        policy_mode and generate_brief_clicked and st.session_state.get('all_chunks')
+    )
+    trigger_chat_request = user_query and st.session_state.get('all_chunks')
+
+    if trigger_chat_request or trigger_policy_request:
+        base_query = user_query or policy_directive or "Provide an expert policy analysis of the uploaded documents."
+        if policy_mode and policy_directive and user_query:
+            effective_query = (
+                f"Primary question: {user_query}\n\nPolicy brief focus: {policy_directive}"
+            )
+        else:
+            effective_query = base_query
+
         time.sleep(1)
         if selected_file != "All":
             file_name = selected_file
             relevant_chunks, _ = retrieve_chunks(
-                user_query,
+                effective_query,
                 st.session_state['index'],
                 st.session_state['all_chunks'],
                 st.session_state['all_embeddings'],
@@ -158,24 +287,45 @@ with st.container():
             )
         else:
             relevant_chunks, _ = retrieve_chunks(
-                user_query,
+                effective_query,
                 st.session_state['index'],
                 st.session_state['all_chunks'],
                 st.session_state['all_embeddings'],
                 co
             )
+
         model = st.session_state.get('fine_tuned_model_id', 'command-r-08-2024')
-        answer = generate_answer(user_query, relevant_chunks, co, model)
+        template_text = st.session_state.get('policy_template_text')
+
+        if st.session_state.get('policy_analysis_mode'):
+            response_text = generate_policy_brief(
+                effective_query,
+                relevant_chunks,
+                co,
+                model=model,
+                template=template_text,
+            )
+            answer = f"📄 **Policy Brief**\n\n{response_text}" if response_text else response_text
+        else:
+            answer = generate_answer(effective_query, relevant_chunks, co, model)
+
         if 'chat_history' not in st.session_state:
             st.session_state['chat_history'] = []
-        st.session_state['chat_history'].append({"role": "user", "content": user_query})
+
+        if user_query and policy_mode and policy_directive:
+            displayed_user_message = f"{user_query}\n\nFocus: {policy_directive}"
+        else:
+            displayed_user_message = user_query or (
+                f"Policy brief focus: {policy_directive}" if policy_directive else "Expert policy analysis requested."
+            )
+        st.session_state['chat_history'].append({"role": "user", "content": displayed_user_message})
         st.session_state['chat_history'].append({"role": "bot", "content": answer})
         st.rerun()  # Refresh to show new message
 
-# Footer: Evaluation Criteria & Info
-st.markdown("""
----
-**Precision@3**: Fraction of top-3 retrieved chunks that are relevant. High values indicate low false positives.  
-**MRR (Mean Reciprocal Rank)**: Rank of the first relevant chunk. High values mean relevant chunks are retrieved early.  
+# # Footer: Evaluation Criteria & Info
+# st.markdown("""
+# ---
+# **Precision@3**: Fraction of top-3 retrieved chunks that are relevant. High values indicate low false positives.  
+# **MRR (Mean Reciprocal Rank)**: Rank of the first relevant chunk. High values mean relevant chunks are retrieved early.  
 
-""")
+# """)

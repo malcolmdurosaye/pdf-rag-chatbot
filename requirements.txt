@@ -6,3 +6,4 @@ pytesseract
 faiss-cpu
 pillow
 numpy
+python-docx
