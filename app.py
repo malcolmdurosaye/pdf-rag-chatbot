@@ -35,33 +35,41 @@ conn = init_db(DB_PATH)
 st.sidebar.subheader("Upload PDFs")
 uploaded_files = st.sidebar.file_uploader("Choose PDFs", type="pdf", accept_multiple_files=True)
 if uploaded_files:
-    st.session_state['uploaded_files'] = [f.name for f in uploaded_files]
-    all_chunks = []
-    all_embeddings_list = []
-    all_file_names = []
+    existing_file_names = set(get_file_names(conn))
+    new_files = []
     for uploaded_file in uploaded_files:
-        file_name = uploaded_file.name.replace('.pdf', '')
-        with st.spinner(f"Processing {uploaded_file.name}..."):
-            text = extract_text_from_pdf(uploaded_file)
-            if not text:
-                st.error(f"Failed to extract text from {uploaded_file.name}.")
-                continue
-            chunks = split_text(text)
-            embeddings = create_embeddings(chunks, co)
-            if embeddings.size == 0:
-                st.error(f"Failed to create embeddings for {uploaded_file.name}.")
-                continue
-            all_chunks.extend(chunks)
-            all_embeddings_list.append(embeddings)
-            all_file_names.extend([file_name] * len(chunks))
-            save_chunks_and_embeddings(conn, file_name, chunks, embeddings)
-            st.success(f"{uploaded_file.name} processed ({len(chunks)} chunks).")
-    if all_embeddings_list:
-        st.session_state['all_embeddings'] = np.vstack(all_embeddings_list)
-        st.session_state['all_chunks'] = all_chunks
-        st.session_state['all_file_names'] = all_file_names
-        st.session_state['index'] = build_faiss_index(st.session_state['all_embeddings'])
-        st.sidebar.success(f"Processed {len(st.session_state['uploaded_files'])} files. Total chunks: {len(all_chunks)}")
+        file_stub = uploaded_file.name.replace('.pdf', '')
+        if file_stub in existing_file_names:
+            st.sidebar.info(f"{uploaded_file.name} already processed. Using cached content.")
+            continue
+        new_files.append((uploaded_file, file_stub))
+
+    if new_files:
+        for uploaded_file, file_name in new_files:
+            with st.spinner(f"Processing {uploaded_file.name}..."):
+                text = extract_text_from_pdf(uploaded_file)
+                if not text:
+                    st.error(f"Failed to extract text from {uploaded_file.name}.")
+                    continue
+                chunks = split_text(text)
+                embeddings = create_embeddings(chunks, co)
+                if embeddings.size == 0:
+                    st.error(f"Failed to create embeddings for {uploaded_file.name}.")
+                    continue
+                save_chunks_and_embeddings(conn, file_name, chunks, embeddings)
+                st.success(f"{uploaded_file.name} processed ({len(chunks)} chunks).")
+
+    chunks, embeddings, file_names = load_chunks_and_embeddings(conn)
+    if chunks:
+        unique_files = list(dict.fromkeys(file_names))
+        st.session_state['uploaded_files'] = unique_files
+        st.session_state['all_chunks'] = chunks
+        st.session_state['all_embeddings'] = embeddings
+        st.session_state['all_file_names'] = file_names
+        st.session_state['index'] = build_faiss_index(embeddings)
+        st.sidebar.success(
+            f"Loaded {len(unique_files)} files from storage. Total chunks: {len(chunks)}"
+        )
 
 
 def extract_policy_template_text(uploaded_template) -> str:
