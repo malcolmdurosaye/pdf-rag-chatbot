@@ -1,0 +1,8 @@
+streamlit
+cohere
+PyPDF2
+pdf2image
+pytesseract
+faiss-cpu
+pillow
+numpy
