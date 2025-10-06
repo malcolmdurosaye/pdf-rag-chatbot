@@ -292,7 +292,63 @@ with st.container():
 
     if trigger_chat_request or trigger_policy_request:
         base_query = user_query or policy_directive or "Provide an expert policy analysis of the uploaded documents."
-        if policy_mode and policy_directive and user_query:
+        summarize_selected_policy = (
+            bool(user_query)
+            and "summarize" in user_query.lower()
+            and not policy_mode
+        )
+
+        skip_generation = False
+        effective_query = base_query
+        if summarize_selected_policy:
+            if selected_file == "All":
+                imported_files = st.session_state.get('all_file_names', [])
+                matched_policy = None
+                cleaned_query = ''.join(ch if ch.isalnum() or ch.isspace() else ' ' for ch in user_query.lower())
+                cleaned_query = ' '.join(cleaned_query.split())
+
+                for name in imported_files:
+                    base_lower = name.lower()
+                    normalized = base_lower.replace('_', ' ').replace('-', ' ')
+                    normalized_no_digits = ''.join(ch if not ch.isdigit() else ' ' for ch in normalized)
+                    normalized_no_digits = ' '.join(normalized_no_digits.split())
+
+                    candidate_strings = {
+                        base_lower,
+                        normalized,
+                        normalized_no_digits,
+                    }
+
+                    # also include forms with key suffixes removed
+                    if any(keyword in normalized for keyword in ["policy", "strategy", "plan", "document"]):
+                        candidate_strings.add(' '.join(part for part in normalized.split() if part not in {"policy", "strategy", "plan", "document"}))
+
+                    for candidate in filter(None, candidate_strings):
+                        cleaned_candidate = ' '.join(candidate.split())
+                        if cleaned_candidate and cleaned_candidate in cleaned_query:
+                            matched_policy = name
+                            break
+                    if matched_policy:
+                        break
+
+                if matched_policy:
+                    st.session_state['selected_file_choice'] = matched_policy
+                    selected_file = matched_policy
+                    display_name = matched_policy.replace('_', ' ').replace('-', ' ').strip()
+                    effective_query = (
+                        f"Summarize the policy titled '{display_name}'. "
+                        "Highlight its objectives, key provisions, target stakeholders, implementation approach, and expected outcomes using the provided context."
+                    )
+                else:
+                    st.warning("Select or specify a particular policy to summarize.")
+                    skip_generation = True
+            else:
+                display_name = selected_file.replace('_', ' ').replace('-', ' ').strip()
+                effective_query = (
+                    f"Summarize the policy titled '{display_name}'. "
+                    "Highlight its objectives, key provisions, target stakeholders, implementation approach, and expected outcomes using the provided context."
+                )
+        elif policy_mode and policy_directive and user_query:
             effective_query = (
                 f"Primary question: {user_query}\n\nPolicy brief focus: {policy_directive}"
             )
@@ -321,20 +377,15 @@ with st.container():
                 all_file_names=st.session_state.get('all_file_names')
             )
 
+        if skip_generation:
+            relevant_chunks = []
+            source_files = []
+
         if not relevant_chunks:
             st.warning("No content found for the selected policy. Please ensure it was processed successfully.")
         else:
-            qa_context_segments = []
-            policy_context_segments = []
-            for chunk_text, source_name in zip(relevant_chunks, source_files):
-                if source_name:
-                    qa_context_segments.append(f"Policy '{source_name}': {chunk_text}")
-                    policy_context_segments.append(
-                        f"Source: {source_name}\nDetails: {chunk_text}"
-                    )
-                else:
-                    qa_context_segments.append(chunk_text)
-                    policy_context_segments.append(chunk_text)
+            qa_context_segments = list(relevant_chunks)
+            policy_context_segments = list(relevant_chunks)
 
             model = st.session_state.get('fine_tuned_model_id', 'command-r-08-2024')
             template_text = st.session_state.get('policy_template_text')
