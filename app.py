@@ -6,6 +6,7 @@ import time
 import sqlite3
 import numpy as np
 from io import BytesIO
+from typing import Tuple
 from docx import Document
 from src.pdf_processing import extract_text_from_pdf, split_text
 from src.rag_pipeline import (
@@ -74,8 +75,8 @@ if uploaded_files:
         )
 
 
-def extract_policy_template_text(uploaded_template) -> str:
-    """Extract readable text from a DOCX policy brief template."""
+def extract_policy_template_text(uploaded_template) -> Tuple[str, str]:
+    """Extract template sections and instructions from a DOCX policy brief template."""
     try:
         file_bytes = uploaded_template.read()
         if hasattr(uploaded_template, "seek"):
@@ -83,18 +84,33 @@ def extract_policy_template_text(uploaded_template) -> str:
         document = Document(BytesIO(file_bytes))
     except Exception as template_error:
         st.sidebar.warning(f"Unable to read template: {template_error}")
-        return ""
+        return "", ""
 
-    lines = []
+    template_lines = []
+    instruction_lines = []
     for paragraph in document.paragraphs:
-        lines.append(paragraph.text)
+        text = paragraph.text.strip()
+        if not text:
+            continue
+        if text.lower().startswith(("instruction", "instructions", "guidance", "guidelines", "note", "notes")):
+            instruction_lines.append(text)
+        else:
+            template_lines.append(text)
     for table in document.tables:
         for row in table.rows:
             cell_text = [cell.text.strip() for cell in row.cells]
-            lines.append("\t".join(filter(None, cell_text)))
+            row_text = "\t".join(filter(None, cell_text))
+            if not row_text:
+                continue
+            lowered = row_text.lower()
+            if lowered.startswith(("instruction", "instructions", "guidance", "guidelines", "note", "notes")):
+                instruction_lines.append(row_text)
+            else:
+                template_lines.append(row_text)
 
-    template_text = "\n".join(lines).strip()
-    return template_text
+    template_text = "\n".join(template_lines).strip()
+    instruction_text = "\n".join(instruction_lines).strip()
+    return template_text, instruction_text
 
 
 st.sidebar.subheader("Policy Brief Template (optional)")
@@ -104,8 +120,9 @@ template_uploader = st.sidebar.file_uploader(
     key="policy_template_uploader",
 )
 if template_uploader is not None:
-    template_text = extract_policy_template_text(template_uploader)
+    template_text, template_instructions = extract_policy_template_text(template_uploader)
     st.session_state['policy_template_text'] = template_text
+    st.session_state['policy_template_instructions'] = template_instructions
     st.session_state['policy_template_name'] = template_uploader.name
     if template_text:
         st.sidebar.success(f"Loaded template: {template_uploader.name}")
@@ -120,6 +137,7 @@ if st.session_state.get('policy_template_text'):
     )
     if st.sidebar.button("Remove policy template"):
         st.session_state.pop('policy_template_text', None)
+        st.session_state.pop('policy_template_instructions', None)
         st.session_state.pop('policy_template_name', None)
         st.sidebar.info("Policy template removed.")
 
@@ -368,14 +386,19 @@ with st.container():
                 all_file_names=st.session_state['all_file_names']
             )
         else:
-            relevant_chunks, _, source_files = retrieve_chunks(
-                effective_query,
-                st.session_state['index'],
-                st.session_state['all_chunks'],
-                st.session_state['all_embeddings'],
-                co,
-                all_file_names=st.session_state.get('all_file_names')
-            )
+            if st.session_state.get('policy_analysis_mode'):
+                st.warning("Select a specific policy before generating a policy brief.")
+                relevant_chunks = []
+                source_files = []
+            else:
+                relevant_chunks, _, source_files = retrieve_chunks(
+                    effective_query,
+                    st.session_state['index'],
+                    st.session_state['all_chunks'],
+                    st.session_state['all_embeddings'],
+                    co,
+                    all_file_names=st.session_state.get('all_file_names')
+                )
 
         if skip_generation:
             relevant_chunks = []
@@ -389,6 +412,7 @@ with st.container():
 
             model = st.session_state.get('fine_tuned_model_id', 'command-r-08-2024')
             template_text = st.session_state.get('policy_template_text')
+            template_instructions = st.session_state.get('policy_template_instructions', "")
             used_sources = sorted({name for name in source_files if name})
 
             if st.session_state.get('policy_analysis_mode'):
@@ -398,6 +422,7 @@ with st.container():
                     co,
                     model=model,
                     template=template_text,
+                    template_instructions=template_instructions,
                     source_names=used_sources,
                     primary_policy=selected_file if selected_file != "All" else None,
                 )

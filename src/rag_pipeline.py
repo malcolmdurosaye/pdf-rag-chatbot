@@ -187,6 +187,7 @@ def generate_policy_brief(
     cohere_client,
     model: str = 'command-r-08-2024',
     template: Optional[str] = None,
+    template_instructions: Optional[str] = None,
     source_names: Optional[List[str]] = None,
     primary_policy: Optional[str] = None
 ) -> str:
@@ -204,6 +205,7 @@ def generate_policy_brief(
     )
 
     template_text = template or default_template
+    instruction_text = template_instructions.strip() if template_instructions else ""
     context = "\n".join(relevant_chunks)
     unique_sources = sorted(set(source_names)) if source_names else []
     source_prompt = (
@@ -230,6 +232,10 @@ def generate_policy_brief(
     prompt = (
         f"Context:\n{context}\n\n"
         f"Template:\n{template_text}\n\n"
+    )
+    if instruction_text:
+        prompt += f"Template Instructions:\n{instruction_text}\n\n"
+    prompt += (
         f"Task:\n{instructions}\n\n"
         f"Policy Brief Request:\n{query}\n\n"
         "Complete Policy Brief:"
