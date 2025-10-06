@@ -86,7 +86,7 @@ def evaluate_retrieval(
     for entry in ground_truth:
         query = entry["query"]
         relevant_indices = entry["relevantIndices"]
-        relevant_chunks, retrieved_indices = retrieve_chunks(query, index, chunks, embeddings, cohere_client, k)
+        _, retrieved_indices, _ = retrieve_chunks(query, index, chunks, embeddings, cohere_client, k)
         relevant_retrieved = len(set(retrieved_indices) & set(relevant_indices))
         precision = relevant_retrieved / k
         total_precision += precision

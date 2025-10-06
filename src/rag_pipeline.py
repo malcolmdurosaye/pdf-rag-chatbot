@@ -91,24 +91,32 @@ def retrieve_chunks(
     k: int = 3,
     file_name: Optional[str] = None,
     all_file_names: Optional[List[str]] = None
-) -> Tuple[List[str], List[int]]:
+) -> Tuple[List[str], List[int], List[str]]:
     """
     Retrieve top-k relevant chunks for a query. If file_name is provided, filter chunks/embeddings for that file.
+    Returns chunk texts, their global indices, and the originating file names.
     """
+
+    filtered_indices: Optional[List[int]] = None
+    filtered_file_names: Optional[List[str]] = None
+
     if file_name and all_file_names:
-        # Filter chunks and embeddings for the selected file
         filtered_indices = [i for i, fname in enumerate(all_file_names) if fname == file_name]
         filtered_chunks = [chunks[i] for i in filtered_indices]
         filtered_embeddings = embeddings[filtered_indices] if len(filtered_indices) > 0 else np.array([])
         if filtered_embeddings.size == 0:
-            st.warning(f"No chunks found for {file_name}; querying all files.")
-            filtered_chunks = chunks
-            filtered_embeddings = embeddings
+            st.warning(f"No chunks found for {file_name}. Ensure the policy was processed and try again.")
+            return [], [], []
+        filtered_file_names = [all_file_names[i] for i in filtered_indices]
         filtered_index = build_faiss_index(filtered_embeddings)
     else:
         filtered_chunks = chunks
         filtered_embeddings = embeddings
         filtered_index = index
+        if all_file_names:
+            filtered_indices = list(range(len(all_file_names)))
+            filtered_file_names = all_file_names
+
     try:
         query_response = cohere_client.embed(
             model='embed-multilingual-v3.0',
@@ -117,22 +125,54 @@ def retrieve_chunks(
         )
         query_embedding = np.array(query_response.embeddings, dtype=np.float32)
         distances, indices = filtered_index.search(query_embedding, k)
-        return [filtered_chunks[i] for i in indices[0]], indices[0].tolist()
+
+        retrieved_chunks: List[str] = []
+        retrieved_indices: List[int] = []
+        retrieved_files: List[str] = []
+        for idx in indices[0]:
+            retrieved_chunks.append(filtered_chunks[idx])
+
+            if filtered_indices is not None and idx < len(filtered_indices):
+                global_idx = filtered_indices[idx]
+            else:
+                global_idx = idx
+            retrieved_indices.append(global_idx)
+
+            if filtered_file_names is not None and idx < len(filtered_file_names):
+                retrieved_files.append(filtered_file_names[idx])
+            elif file_name:
+                retrieved_files.append(file_name)
+            elif all_file_names and global_idx < len(all_file_names):
+                retrieved_files.append(all_file_names[global_idx])
+            else:
+                retrieved_files.append("")
+
+        return retrieved_chunks, retrieved_indices, retrieved_files
     except Exception as e:
         st.error(f"Error retrieving chunks for query '{query}': {str(e)}")
-        return [], []
+        return [], [], []
 
 def generate_answer(
     query: str,
     relevant_chunks: List[str],
     cohere_client,
-    model: str = 'command-r-08-2024'
+    model: str = 'command-r-08-2024',
+    source_names: Optional[List[str]] = None
 ) -> str:
     """
     Generate answer using Cohere API and retrieved chunks.
     """
     context = "\n".join(relevant_chunks)
-    prompt = f"Context: {context}\n\nQuestion: {query}\nAnswer:"
+    unique_sources = sorted(set(source_names)) if source_names else []
+    source_prompt = (
+        "Relevant policy documents: " + ", ".join(unique_sources) + ". "
+        if unique_sources else ""
+    )
+    prompt = (
+        "Use the provided context to answer the question. "
+        "Reference the relevant policy documents by name when you cite their information. "
+        f"{source_prompt}\n\nContext:\n{context}\n\nQuestion: {query}\nAnswer:"
+    )
     try:
         response = cohere_client.chat(model=model, message=prompt)
         return response.text
@@ -146,7 +186,9 @@ def generate_policy_brief(
     relevant_chunks: List[str],
     cohere_client,
     model: str = 'command-r-08-2024',
-    template: Optional[str] = None
+    template: Optional[str] = None,
+    source_names: Optional[List[str]] = None,
+    primary_policy: Optional[str] = None
 ) -> str:
     """Generate a structured policy brief using the retrieved context and optional template."""
 
@@ -163,10 +205,27 @@ def generate_policy_brief(
 
     template_text = template or default_template
     context = "\n".join(relevant_chunks)
+    unique_sources = sorted(set(source_names)) if source_names else []
+    source_prompt = (
+        "You may reference the following policy documents, but only list their names under 'References or Supporting Evidence': "
+        + ", ".join(unique_sources)
+        + "."
+        if unique_sources
+        else ""
+    )
+    policy_focus = (
+        f"Focus the brief on the policy titled '{primary_policy}'. "
+        if primary_policy else ""
+    )
+
     instructions = (
         "You are an expert policy analyst. Use the provided context to craft a concise, actionable policy brief. "
         "Populate every section of the template, synthesizing evidence-driven insights. "
-        "Highlight implications, cite supporting facts from the context, and ensure recommendations are practical."
+        "Highlight implications, cite supporting facts from the context, and ensure recommendations are practical. "
+        "Do NOT include inline citations or parentheses with policy names in any section. "
+        "List policy titles only in the 'References or Supporting Evidence' section. "
+        f"{policy_focus}"
+        f"{source_prompt}"
     )
     prompt = (
         f"Context:\n{context}\n\n"

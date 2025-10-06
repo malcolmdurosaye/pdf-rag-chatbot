@@ -249,6 +249,9 @@ with st.container():
     )
     st.session_state['policy_analysis_mode'] = policy_mode
 
+    if policy_mode and selected_file == "All":
+        st.warning("Choose a specific policy document before generating an expert brief.")
+
     generate_brief_clicked = False
     if policy_mode:
         if st.session_state.get('policy_template_text'):
@@ -266,6 +269,7 @@ with st.container():
         st.session_state['policy_directive'] = policy_directive
         generate_brief_clicked = st.button(
             "Generate policy brief",
+            disabled=(selected_file == "All"),
             use_container_width=True,
             key="generate_policy_brief_button",
         )
@@ -279,7 +283,10 @@ with st.container():
     if not policy_mode:
         user_query = st.chat_input(placeholder="Ask anything")
     trigger_policy_request = (
-        policy_mode and generate_brief_clicked and st.session_state.get('all_chunks')
+        policy_mode
+        and generate_brief_clicked
+        and st.session_state.get('all_chunks')
+        and selected_file != "All"
     )
     trigger_chat_request = user_query and st.session_state.get('all_chunks')
 
@@ -295,7 +302,7 @@ with st.container():
         time.sleep(1)
         if selected_file != "All":
             file_name = selected_file
-            relevant_chunks, _ = retrieve_chunks(
+            relevant_chunks, _, source_files = retrieve_chunks(
                 effective_query,
                 st.session_state['index'],
                 st.session_state['all_chunks'],
@@ -305,41 +312,70 @@ with st.container():
                 all_file_names=st.session_state['all_file_names']
             )
         else:
-            relevant_chunks, _ = retrieve_chunks(
+            relevant_chunks, _, source_files = retrieve_chunks(
                 effective_query,
                 st.session_state['index'],
                 st.session_state['all_chunks'],
                 st.session_state['all_embeddings'],
-                co
-            )
-
-        model = st.session_state.get('fine_tuned_model_id', 'command-r-08-2024')
-        template_text = st.session_state.get('policy_template_text')
-
-        if st.session_state.get('policy_analysis_mode'):
-            response_text = generate_policy_brief(
-                effective_query,
-                relevant_chunks,
                 co,
-                model=model,
-                template=template_text,
+                all_file_names=st.session_state.get('all_file_names')
             )
-            answer = f"📄 **Policy Brief**\n\n{response_text}" if response_text else response_text
-        else:
-            answer = generate_answer(effective_query, relevant_chunks, co, model)
 
-        if 'chat_history' not in st.session_state:
-            st.session_state['chat_history'] = []
-
-        if user_query and policy_mode and policy_directive:
-            displayed_user_message = f"{user_query}\n\nFocus: {policy_directive}"
+        if not relevant_chunks:
+            st.warning("No content found for the selected policy. Please ensure it was processed successfully.")
         else:
-            displayed_user_message = user_query or (
-                f"Policy brief focus: {policy_directive}" if policy_directive else "Expert policy analysis requested."
-            )
-        st.session_state['chat_history'].append({"role": "user", "content": displayed_user_message})
-        st.session_state['chat_history'].append({"role": "bot", "content": answer})
-        st.rerun()  # Refresh to show new message
+            qa_context_segments = []
+            policy_context_segments = []
+            for chunk_text, source_name in zip(relevant_chunks, source_files):
+                if source_name:
+                    qa_context_segments.append(f"Policy '{source_name}': {chunk_text}")
+                    policy_context_segments.append(
+                        f"Source: {source_name}\nDetails: {chunk_text}"
+                    )
+                else:
+                    qa_context_segments.append(chunk_text)
+                    policy_context_segments.append(chunk_text)
+
+            model = st.session_state.get('fine_tuned_model_id', 'command-r-08-2024')
+            template_text = st.session_state.get('policy_template_text')
+            used_sources = sorted({name for name in source_files if name})
+
+            if st.session_state.get('policy_analysis_mode'):
+                response_text = generate_policy_brief(
+                    effective_query,
+                    policy_context_segments,
+                    co,
+                    model=model,
+                    template=template_text,
+                    source_names=used_sources,
+                    primary_policy=selected_file if selected_file != "All" else None,
+                )
+                answer = f"📄 **Policy Brief**\n\n{response_text}" if response_text else response_text
+            else:
+                answer = generate_answer(
+                    effective_query,
+                    qa_context_segments,
+                    co,
+                    model,
+                    source_names=used_sources,
+                )
+
+            if used_sources and answer and not st.session_state.get('policy_analysis_mode'):
+                answer = f"{answer}\n\n_Sources: {', '.join(used_sources)}_"
+
+            if 'chat_history' not in st.session_state:
+                st.session_state['chat_history'] = []
+
+            if user_query and policy_mode and policy_directive:
+                displayed_user_message = f"{user_query}\n\nFocus: {policy_directive}"
+            else:
+                displayed_user_message = user_query or (
+                    f"Policy brief focus: {policy_directive}" if policy_directive else "Expert policy analysis requested."
+                )
+
+            st.session_state['chat_history'].append({"role": "user", "content": displayed_user_message})
+            st.session_state['chat_history'].append({"role": "bot", "content": answer})
+            st.rerun()  # Refresh to show new message
 
 # # Footer: Evaluation Criteria & Info
 # st.markdown("""
