@@ -21,7 +21,11 @@ from src.fine_tuning import generate_fine_tune_dataset, start_fine_tuning
 from src.storage import init_db, save_chunks_and_embeddings, load_chunks_and_embeddings, load_chunks_for_file, get_file_names
 
 # Set Cohere API key (from secrets, not UI)
-COHERE_API_KEY = st.secrets.get("COHERE_API_KEY", "sS5dzpbakUlfsYsIdLMwFUic1MV8JJZbsSpG89Aa")
+COHERE_API_KEY = st.secrets.get("COHERE_API_KEY") or os.environ.get("COHERE_API_KEY")
+if not COHERE_API_KEY:
+    st.error("Cohere API key not found. Add COHERE_API_KEY to Streamlit secrets or environment variables.")
+    st.stop()
+
 co = cohere.Client(COHERE_API_KEY)
 
 # Sidebar: File Upload & Model Selection
